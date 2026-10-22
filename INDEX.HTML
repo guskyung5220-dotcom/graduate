@@ -1,0 +1,74 @@
+using System;
+using System.IO;
+using System.IO.Compression;
+using System.Text;
+using System.Collections.Generic;
+
+public static class HwpText {
+    static byte[] data; static int secSize; static int miniSize; static List<int> fat = new List<int>(); static List<int> miniFat = new List<int>();
+    static byte[] miniStream;
+    static int I32(byte[] b, int o) { return BitConverter.ToInt32(b, o); }
+    static byte[] Chain(int start, long size) {
+        var ms = new MemoryStream(); int s = start;
+        while (s >= 0 && ms.Length < size) { ms.Write(data, 512 + s * secSize, secSize); s = fat[s]; }
+        var r = ms.ToArray(); Array.Resize(ref r, (int)Math.Min(size, r.Length)); return r;
+    }
+    static byte[] MiniChain(int start, long size) {
+        var ms = new MemoryStream(); int s = start;
+        while (s >= 0 && ms.Length < size) { ms.Write(miniStream, s * miniSize, miniSize); s = miniFat[s]; }
+        var r = ms.ToArray(); Array.Resize(ref r, (int)Math.Min(size, r.Length)); return r;
+    }
+    public static string Extract(string path) {
+        data = File.ReadAllBytes(path); fat.Clear(); miniFat.Clear();
+        secSize = 1 << BitConverter.ToUInt16(data, 0x1E); miniSize = 1 << BitConverter.ToUInt16(data, 0x20);
+        int nFat = I32(data, 0x2C), dirStart = I32(data, 0x30), miniFatStart = I32(data, 0x3C);
+        var fatSecs = new List<int>();
+        for (int i = 0; i < 109 && fatSecs.Count < nFat; i++) fatSecs.Add(I32(data, 0x4C + i * 4));
+        int difat = I32(data, 0x44);
+        while (fatSecs.Count < nFat && difat >= 0) {
+            int off = 512 + difat * secSize;
+            for (int i = 0; i < secSize / 4 - 1 && fatSecs.Count < nFat; i++) fatSecs.Add(I32(data, off + i * 4));
+            difat = I32(data, off + secSize - 4);
+        }
+        foreach (var fs in fatSecs) for (int i = 0; i < secSize / 4; i++) fat.Add(I32(data, 512 + fs * secSize + i * 4));
+        var dir = Chain(dirStart, long.MaxValue / 2);
+        var names = new List<string>(); var starts = new List<int>(); var sizes = new List<long>();
+        for (int o = 0; o + 128 <= dir.Length; o += 128) {
+            int nl = BitConverter.ToUInt16(dir, o + 64);
+            names.Add(nl > 2 ? Encoding.Unicode.GetString(dir, o, nl - 2) : "");
+            starts.Add(I32(dir, o + 116)); sizes.Add(BitConverter.ToUInt32(dir, o + 120));
+        }
+        miniStream = Chain(starts[0], sizes[0]);
+        if (miniFatStart >= 0) { var mf = Chain(miniFatStart, long.MaxValue / 2); for (int i = 0; i + 4 <= mf.Length; i += 4) miniFat.Add(I32(mf, i)); }
+        var sb = new StringBuilder();
+        for (int sec = 0; sec < 20; sec++) {
+            int idx = names.IndexOf("Section" + sec); if (idx < 0) break;
+            var raw = sizes[idx] < 4096 ? MiniChain(starts[idx], sizes[idx]) : Chain(starts[idx], sizes[idx]);
+            byte[] body;
+            using (var ds = new DeflateStream(new MemoryStream(raw), CompressionMode.Decompress)) { var m = new MemoryStream(); ds.CopyTo(m); body = m.ToArray(); }
+            int p = 0;
+            while (p + 4 <= body.Length) {
+                uint h = BitConverter.ToUInt32(body, p); p += 4;
+                int tag = (int)(h & 0x3FF), size = (int)(h >> 20);
+                if (size == 0xFFF) { size = I32(body, p); p += 4; }
+                if (tag == 72 && size >= 16) {
+                    sb.AppendFormat("\n  [r{0} c{1} rs{2} cs{3}] ", BitConverter.ToUInt16(body, p + 10), BitConverter.ToUInt16(body, p + 8), BitConverter.ToUInt16(body, p + 14), BitConverter.ToUInt16(body, p + 12));
+                } else if (tag == 77) { sb.Append("\n[TABLE]"); }
+                else if (tag == 67) {
+                    var t = new StringBuilder();
+                    for (int i = 0; i + 1 < size; ) {
+                        int c = BitConverter.ToUInt16(body, p + i);
+                        if (c < 32) {
+                            if (c == 0 || c == 10 || c == 13 || (c >= 24 && c <= 31)) i += 2;
+                            else i += 16;
+                        } else { t.Append((char)c); i += 2; }
+                    }
+                    sb.Append(t.ToString().Trim());
+                    sb.Append(" ");
+                }
+                p += size;
+            }
+        }
+        return sb.ToString();
+    }
+}
