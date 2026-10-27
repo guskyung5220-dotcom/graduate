@@ -181,19 +181,19 @@ input.num{text-align:center}
 .backup .hint{font-size:11.5px;color:var(--muted)}
 
 /* 직원용: 원생 시트 탭 (엑셀 시트처럼) */
-.sheetbar{display:flex;align-items:flex-end;gap:2px;overflow-x:auto;margin-top:10px;border-bottom:1px solid var(--rule);scrollbar-width:thin}
-.sheetbar .lbl{flex:0 0 auto;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.04em;padding:0 10px 7px 0}
-.stab{flex:0 0 auto;display:flex;align-items:center;gap:4px;font:inherit;font-size:13px;background:var(--head);color:var(--muted);border:1px solid var(--rule-soft);border-bottom:0;border-radius:5px 5px 0 0;padding:5px 10px;cursor:pointer;max-width:16em}
+.sheetbar{display:flex;align-items:flex-end;gap:3px;overflow-x:auto;margin-top:12px;padding:10px 10px 0;background:var(--accent-soft);border:1px solid var(--rule-soft);border-bottom:2px solid var(--accent);border-radius:6px 6px 0 0;scrollbar-width:thin}
+.sheetbar .lbl{flex:0 0 auto;font-size:13px;font-weight:700;color:var(--accent);padding:0 12px 9px 2px}
+.stab{flex:0 0 auto;display:flex;align-items:center;gap:4px;font:inherit;font-size:14px;background:var(--head);color:var(--muted);border:1px solid var(--rule-soft);border-bottom:0;border-radius:6px 6px 0 0;padding:7px 12px;cursor:pointer;max-width:20em}
 .stab .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.stab[aria-selected="true"]{background:var(--paper);color:var(--ink);font-weight:700;border-color:var(--rule);position:relative;top:1px}
+.stab[aria-selected="true"]{background:var(--paper);color:var(--ink);font-weight:700;border-color:var(--accent);border-width:2px 2px 0;position:relative;top:2px}
 .stab:focus-visible,.sadd:focus-visible,.sact:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .stab input{font:inherit;font-size:13px;width:10em;border:1px solid var(--accent);border-radius:3px;padding:1px 4px;background:var(--paper);color:var(--ink)}
 .sact{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:12px;padding:1px 4px;border-radius:3px}
 .sact:hover{background:var(--accent-soft);color:var(--ink)}
 .sact.del:hover{background:var(--bad-soft);color:var(--bad)}
 .sact.armed{background:var(--bad);color:var(--paper)}
-.sadd{flex:0 0 auto;font:inherit;font-size:13px;font-weight:600;color:var(--accent);background:transparent;border:1px dashed var(--accent);border-bottom:0;border-radius:5px 5px 0 0;padding:5px 10px;cursor:pointer;margin-left:4px}
-.sadd:hover{background:var(--accent-soft)}
+.sadd{flex:0 0 auto;font:inherit;font-size:14px;font-weight:700;color:var(--paper);background:var(--accent);border:0;border-radius:6px 6px 0 0;padding:7px 14px;cursor:pointer;margin-left:6px}
+.sadd:hover{filter:brightness(1.1)}
 </style>
 </head>
 <body>
@@ -343,7 +343,9 @@ function group(){
 function sheet(){ const g = group(); return g.list[g.active]; }
 function sheetName(sh){
   if (sh.custom) return sh.label;
-  return [sh.student.id, sh.student.name].filter(filled).join(' ') || sh.label;
+  const base = [sh.student.id, sh.student.name].filter(filled).join(' ');
+  const yr = filled(sh.student.year) ? `${sh.student.year}입학` : '';
+  return [base, yr].filter(filled).join(' · ') || sh.label;
 }
 function S(){
   if (STAFF) return sheet().data;
@@ -580,7 +582,7 @@ function renderSheetbar(){
   if (!STAFF) { bar.hidden = true; return; }
   bar.hidden = false;
   const g = group();
-  bar.innerHTML = `<span class="lbl">원생 시트</span>` + g.list.map((sh, i) => {
+  bar.innerHTML = `<span class="lbl">원생 시트 (${g.list.length}명)</span>` + g.list.map((sh, i) => {
     const on = i === g.active;
     const nm = renaming && on
       ? `<input id="sheet-rename" value="${esc(sheetName(sh))}" aria-label="시트 이름">`
@@ -836,7 +838,7 @@ form.addEventListener('input', e => {
   const t = e.target;
   if (t.id === 'stu-name' || t.id === 'stu-id' || t.id === 'stu-year') {
     STU()[t.id.slice(4)] = t.value;
-    if (STAFF && t.id !== 'stu-year') { sheet().custom = false; renderSheetbar(); }
+    if (STAFF) { sheet().custom = false; renderSheetbar(); }
     save(); compute(); return;
   }
   if (t.dataset.path && t.type !== 'checkbox') { setPath(S(), t.dataset.path, t.value); commit(); }
