@@ -162,6 +162,30 @@ input.num{text-align:center}
 #chip .dot{width:9px;height:9px;border-radius:50%}
 @media (prefers-reduced-motion:no-preference){.result,.out{transition:color .15s}}
 
+/* PDF 저장(인쇄): 버튼·탭은 빼고 양식과 판정 결과만, A4 가로 */
+@media print{
+  @page{size:A4 landscape;margin:10mm}
+  :root,:root:not([data-theme="light"]),:root[data-theme="dark"]{
+    --bg:#FFFFFF; --paper:#FFFFFF; --ink:#18202B; --muted:#5A6576; --rule:#8C97A6; --rule-soft:#C9D0DA;
+    --head:#E3E9F0; --head-strong:#D3DCE7; --accent:#23507A; --accent-soft:#DCE7F2; --xline:#C2413A;
+    --ok:#1D7A4E; --ok-soft:#E1F2E8; --bad:#B3261E; --bad-soft:#FBE4E2; --warn:#9A5C00; --warn-soft:#FBEFD9; color-scheme:light}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{background:#fff;font-size:11px}
+  .wrap{padding:0;max-width:none}
+  .tabs,.trackbar,.sheetbar,.backup,#chip,#chip.force,.hide-btn,.tools,.add,.del,.notice,details.ref,.notes{display:none !important}
+  .layout{display:block !important}
+  #result{display:block !important;margin-top:12px;break-inside:avoid}
+  .aside{position:static !important;max-height:none !important;overflow:visible !important}
+  .scroll{overflow:visible !important}
+  table.grad,table.cert,table.c1{min-width:0 !important}
+  .sheet{border:0;padding:0;break-inside:auto}
+  .main{gap:12px}
+  input.cell,select.cell{border:0 !important;background:transparent !important}
+  input.cell::placeholder{color:transparent}
+  select.cell{appearance:none;-webkit-appearance:none}
+  table.form th,table.form td{padding:3px 4px}
+}
+
 /* 결과 숨기기 */
 .verdict{position:relative}
 .hide-btn{position:absolute;top:12px;right:14px;font-size:12px;padding:3px 8px}
@@ -905,62 +929,182 @@ syncTerm();
 termYear.addEventListener('input', () => { store.term.year = termYear.value.replace(/\D/g, ''); save(); });
 termSem.addEventListener('change', () => { store.term.sem = termSem.value; save(); });
 
+/* ---------- PDF 저장(인쇄 창) · 직원용 엑셀 저장 ---------- */
+const bk = document.getElementById('backup');
+bk.innerHTML = `${STAFF ? '<button type="button" class="btn" id="bk-xlsx" style="border-color:var(--ok);color:var(--ok)">엑셀로 저장 (전체 원생)</button>' : ''}
+  <button type="button" class="btn" id="bk-pdf">PDF로 저장${STAFF ? ' (현재 원생)' : ''}</button>
+  <span class="hint" id="bk-msg">${STAFF ? '입력 내용은 이 PC 브라우저에 자동 저장돼요' : ''}</span>`;
+const msg = t => document.getElementById('bk-msg').textContent = t;
+document.getElementById('bk-pdf').addEventListener('click', () => {
+  msg('인쇄 창의 "대상"에서 PDF로 저장을 고르세요');
+  const keep = document.title, st = STU();
+  document.title = ['졸업가심사', st.id, st.name].filter(filled).join('_');   // PDF 기본 파일 이름
+  window.print();
+  setTimeout(() => { document.title = keep; }, 1000);
+});
+
 if (STAFF) {
   document.getElementById('page-title').textContent = '졸업 가심사 관리';
   document.title = '졸업가심사 관리';
-  const bk = document.getElementById('backup');
-  bk.innerHTML = `<button type="button" class="btn" id="bk-xlsx" style="border-color:var(--ok);color:var(--ok)">엑셀로 저장</button>
-    <button type="button" class="btn" id="bk-save">백업 파일 저장</button>
-    <button type="button" class="btn" id="bk-load">백업 불러오기</button>
-    <input type="file" id="bk-file" accept=".json,application/json" hidden>
-    <span class="hint" id="bk-msg">입력 내용은 이 PC 브라우저에 자동 저장돼요</span>`;
-  const msg = t => document.getElementById('bk-msg').textContent = t;
-  let loadArmed = false;
-  document.getElementById('bk-save').addEventListener('click', () => {
-    const d = new Date(), pad = n => String(n).padStart(2, '0');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(store)], {type:'application/json'}));
-    a.download = `졸업가심사_백업_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    msg('백업 파일을 저장했어요');
-  });
-  /* 엑셀 저장: 원생별 요약 / 항목별 판정 / 입력 과목 3개 시트 */
+
+  /* 엑셀 저장: '원생별 요약' 시트 + 원생마다 화면 양식과 같은 모양의 시트 */
   const loadXLSX = () => window.XLSX ? Promise.resolve() : new Promise((ok, fail) => {
     const sc = document.createElement('script');
-    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    sc.src = 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
     sc.onload = ok; sc.onerror = fail; document.head.appendChild(sc);
   });
-  const STATUS = {ok:'충족', bad:'부족', warn:'확인 필요', info:'안내'};
-  function coursesOf(c, s){
-    const out = [], push = (cat, n, sem, grade, cr) => out.push({cat, n, sem: sem || '', grade: grade || '', cr: cr || ''});
-    const LBL = {edu:'교과교육학', content:'교과내용학', teach:'교직과목', extra:'추가학점', common:'일선/공통'};
-    Object.keys(LBL).forEach(k => {
-      if (k === 'edu' && !c.edu) return;
-      if ((k === 'extra' && s.method === 'thesis')) return;
-      s.lists[k].filter(e => filled(e.n) || num(e.c) > 0).forEach(e => push('졸업 · ' + LBL[k], e.n, '', '', e.c));
+  const FONT = '맑은 고딕';
+  const LINE = {style:'thin', color:{rgb:'8C97A6'}};
+  const BOX = () => ({top:LINE, bottom:LINE, left:LINE, right:LINE});
+  const sty = kind => ({
+    th:    {font:{name:FONT, sz:10, bold:true}, fill:{fgColor:{rgb:'E3E9F0'}}, alignment:{horizontal:'center', vertical:'center', wrapText:true}, border:BOX()},
+    grp:   {font:{name:FONT, sz:10, bold:true}, fill:{fgColor:{rgb:'D3DCE7'}}, alignment:{horizontal:'center', vertical:'center', wrapText:true}, border:BOX()},
+    td:    {font:{name:FONT, sz:10}, alignment:{horizontal:'center', vertical:'center', wrapText:true}, border:BOX()},
+    title: {font:{name:FONT, sz:14, bold:true}, alignment:{horizontal:'center', vertical:'center'}},
+    h2:    {font:{name:FONT, sz:12, bold:true}, alignment:{horizontal:'center', vertical:'center'}},
+    sub:   {font:{name:FONT, sz:10, color:{rgb:'5A6576'}}, alignment:{horizontal:'center', vertical:'center'}}
+  })[kind];
+  const STATUS = {ok:['충족','E1F2E8','1D7A4E'], bad:['부족','FBE4E2','B3261E'], warn:['확인 필요','FBEFD9','9A5C00'], info:['안내','EDF0F4','5A6576']};
+
+  // 화면 표의 칸 하나 → 엑셀 셀 글자 (입력값, □ 체크, 과목 목록 포함)
+  function cellText(cell){
+    const c = cell.cloneNode(true);
+    const orig = [...cell.querySelectorAll('input, select')], copy = [...c.querySelectorAll('input, select')];
+    copy.forEach((el, i) => {
+      const o = orig[i];
+      el.setAttribute('data-v', o.type === 'checkbox' ? (o.checked ? '1' : '') : o.tagName === 'SELECT' ? (o.value ? o.options[o.selectedIndex].text : '') : o.value);
     });
-    if (s.method !== 'extra') s.thesis.forEach((v,i) => v && push('졸업 · 논문·보고서지도', `논문·보고서지도 ${['Ⅰ','Ⅱ','Ⅲ'][i]}`, '', '', '2'));
-    const R = s.rows, done = id => filled(R[id].sem) || filled(R[id].grade);
-    if (c.cert && !c.c1) {
-      THEORY.forEach((n,i) => done('t'+i) && push('교직이론', n, R['t'+i].sem, R['t'+i].grade));
-      LITERACY.forEach((n,i) => done('s'+i) && push('교직소양', n, R['s'+i].sem, R['s'+i].grade));
-      PRACTICE.forEach((n,i) => done('p'+i) && push('교육실습', n, R['p'+i].sem, R['p'+i].grade));
-    }
-    if ((c.cert && !c.c1) || c.minor) {
-      if (c.minor || !c.m.noEduArea) EDU_AREA.forEach((n,i) => done('e'+i) && push('교과교육영역', n, R['e'+i].sem, R['e'+i].grade, R['e'+i].cr));
-    }
-    if (c.cert && !c.c1) s.basic.filter(b => filled(b.n) && (filled(b.sem) || filled(b.grade))).forEach(b => push('기본이수과목', b.n, b.sem, b.grade, b.cr));
-    if (c.minor) s.minor.rows.filter(r => r.pick && (filled(r.sem) || filled(r.grade)))
-      .forEach(r => push(r.pick === '__etc' ? '교과내용영역(기본이수 외)' : '교과내용영역(기본이수)', r.pick === '__etc' ? r.n : r.pick, r.sem, r.grade, r.cr));
-    if (c.c1) {
-      s.c1.req.forEach((r,i) => filled(r.sem) && push('필수', C1_REQ[i], r.sem, '', r.cr));
-      s.c1.elect.filter(e => filled(e.n) && filled(e.sem)).forEach(e => push('선택', e.n, e.sem, '', e.cr));
-    }
-    return out;
+    c.querySelectorAll('button, .add, .del, [hidden]').forEach(n => n.remove());
+    if (!cell.classList.contains('x')) c.querySelectorAll('.x-note').forEach(n => n.remove());
+    c.querySelectorAll('.crow').forEach(row => {
+      const n = row.querySelector('input.n'), cr = row.querySelector('input.cr');
+      if (!n || !cr) return;
+      const nv = n.getAttribute('data-v'), cv = cr.getAttribute('data-v');
+      row.replaceWith(document.createTextNode(nv || cv ? `\n${nv}${cv ? ` (${cv}학점)` : ''}\n` : ''));
+    });
+    c.querySelectorAll('label.box').forEach(l => {
+      const b = l.querySelector('input'); const on = b && b.getAttribute('data-v') === '1';
+      if (b) b.remove();
+      l.replaceWith(document.createTextNode(` ${on ? '■' : '□'} ${l.textContent.trim()} `));
+    });
+    c.querySelectorAll('input, select').forEach(el => el.replaceWith(document.createTextNode(el.getAttribute('data-v') || '')));
+    const flat = node => [...node.childNodes].map(n => {
+      if (n.nodeType === 3) return n.textContent.replace(/\s+/g, ' ');
+      if (n.nodeType !== 1) return '';
+      const blk = /^(DIV|BR|SMALL|P|LI|UL)$/.test(n.tagName);
+      return (blk ? '\n' : '') + flat(n) + (blk ? '\n' : n.tagName === 'SPAN' ? ' ' : '');
+    }).join('');
+    return flat(c).split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
   }
-  function collectAll(){
-    const keepCur = {...store.cur}, rows = [];
+
+  function makeSheet(){
+    const ws = {}, merges = [], heights = [];
+    let row = 0;
+    const put = (r, c, v, s) => { ws[XLSX.utils.encode_cell({r, c})] = {v, t:'s', s}; };
+    const fit = (r, text, cols, rows) => {
+      const lines = String(text).split('\n').reduce((a, l) => a + Math.max(1, Math.ceil(l.length / (cols * 7))), 0);
+      heights[r] = Math.max(heights[r] || 18, Math.ceil(lines * 15 / rows) + 6);
+    };
+    const line = (text, kind, span = 9) => {
+      put(row, 0, text, sty(kind)); merges.push({s:{r:row, c:0}, e:{r:row, c:span - 1}});
+      heights[row] = kind === 'title' ? 28 : 22; row++;
+    };
+    const table = tbl => {
+      const occ = new Set(); let last = row;
+      [...tbl.rows].forEach((tr, ri) => {
+        let c = 0;
+        [...tr.cells].forEach(td => {
+          while (occ.has(`${ri},${c}`)) c++;
+          const rs = td.rowSpan || 1, cs = td.colSpan || 1, r = row + ri;
+          for (let a = 0; a < rs; a++) for (let b = 0; b < cs; b++) occ.add(`${ri + a},${c + b}`);
+          const s = sty(td.classList.contains('grp') ? 'grp' : td.tagName === 'TH' ? 'th' : 'td');
+          if (td.classList.contains('l')) s.alignment.horizontal = 'left';
+          if (td.classList.contains('x')) Object.assign(s.border, {diagonal:{style:'thin', color:{rgb:'C2413A'}}, diagonalUp:true, diagonalDown:true});
+          const text = cellText(td);
+          for (let a = 0; a < rs; a++) for (let b = 0; b < cs; b++) put(r + a, c + b, a === 0 && b === 0 ? text : '', s);
+          if (rs > 1 || cs > 1) merges.push({s:{r, c}, e:{r: r + rs - 1, c: c + cs - 1}});
+          fit(r, text, cs, rs);
+          last = Math.max(last, r + rs);
+          c += cs;
+        });
+      });
+      row = last;
+    };
+    return {ws, merges, heights, put, line, table, get row(){ return row; }, set row(v){ row = v; }};
+  }
+
+  function studentSheet(c, items){
+    const S2 = makeSheet(), form = document.getElementById('form'), st = STU();
+    S2.line(`교육대학원 졸업 가심사 — ${store.term.year}학년도 ${store.term.sem}학기`, 'title');
+    S2.line(`${c.m.name} · ${TRACK[c.track]}${(c.cert || c.minor) ? ' · ' + c.certTitle : ''}`, 'sub');
+    S2.row++;
+    const stu = form.querySelector('table.stu');
+    if (stu) S2.table(stu);
+    S2.row++;
+    form.querySelectorAll('section.sheet').forEach(sec => {
+      const tbl = sec.querySelector('table.grad, table.cert, table.c1'); if (!tbl) return;
+      S2.line(sec.querySelector('.sheet-title h2').textContent.trim(), 'h2');
+      S2.table(tbl);
+      S2.row++;
+    });
+    const bad = items.filter(i => i.st === 'bad').length, warn = items.filter(i => i.st === 'warn').length;
+    S2.line(`판정 결과 — ${bad ? `부족 ${bad}개` : warn ? `확인 필요 ${warn}개` : '졸업요건 충족'}`, 'h2');
+    const head = sty('th');
+    [['구분', 0, 1], ['항목', 2, 4], ['상태', 5, 5], ['내용', 6, 8]].forEach(([t, a, b]) => {
+      for (let k = a; k <= b; k++) S2.put(S2.row, k, k === a ? t : '', head);
+      if (b > a) S2.merges.push({s:{r:S2.row, c:a}, e:{r:S2.row, c:b}});
+    });
+    S2.row++;
+    items.forEach(i => {
+      const [label, bg, fg] = STATUS[i.st];
+      const base = sty('td'), left = sty('td'); left.alignment.horizontal = 'left';
+      const stat = sty('td'); stat.fill = {fgColor:{rgb:bg}}; stat.font = {name:FONT, sz:10, bold:true, color:{rgb:fg}};
+      [[i.grp, 0, 1, base], [i.t, 2, 4, left], [label, 5, 5, stat], [i.d, 6, 8, left]].forEach(([t, a, b, s]) => {
+        for (let k = a; k <= b; k++) S2.put(S2.row, k, k === a ? t : '', s);
+        if (b > a) S2.merges.push({s:{r:S2.row, c:a}, e:{r:S2.row, c:b}});
+      });
+      S2.heights[S2.row] = Math.max(20, Math.ceil(String(i.d).length / 40) * 15 + 6);
+      S2.row++;
+    });
+    const ws = S2.ws;
+    ws['!ref'] = XLSX.utils.encode_range({s:{r:0, c:0}, e:{r:S2.row, c:8}});
+    ws['!merges'] = S2.merges;
+    ws['!cols'] = [12, 22, 12, 10, 12, 22, 12, 10, 10].map(w => ({wch: w}));
+    ws['!rows'] = S2.heights.map(h => h ? {hpt: h} : undefined);
+    ws['!pageSetup'] = {orientation:'landscape', fitToWidth:1};
+    return ws;
+  }
+
+  function summarySheet(rows){
+    const head = ['학기','전공','과정','취득 자격','학번','성명','입학년도','판정','부족 항목','확인 필요 항목'];
+    const ws = {}, put = (r, c, v, s) => { ws[XLSX.utils.encode_cell({r, c})] = {v, t:'s', s}; };
+    head.forEach((h, c) => put(0, c, h, sty('th')));
+    rows.forEach((r, i) => {
+      const st = r.st, bad = r.items.filter(x => x.st === 'bad'), warn = r.items.filter(x => x.st === 'warn');
+      const verdict = bad.length ? `부족 ${bad.length}개` : warn.length ? `확인 필요 ${warn.length}개` : '충족';
+      const key = bad.length ? 'bad' : warn.length ? 'warn' : 'ok';
+      const vals = [`${store.term.year}학년도 ${store.term.sem}학기`, r.c.m.name, TRACK[r.c.track], (r.c.cert || r.c.minor) ? r.c.certTitle : '',
+        st.id || '', st.name || '', st.year || '', verdict,
+        bad.map(x => `· ${x.t}: ${x.d}`).join('\n'), warn.map(x => `· ${x.t}: ${x.d}`).join('\n')];
+      vals.forEach((v, c) => {
+        const s = sty('td');
+        if (c >= 8) s.alignment.horizontal = 'left';
+        if (c === 7) { s.fill = {fgColor:{rgb:STATUS[key][1]}}; s.font = {name:FONT, sz:10, bold:true, color:{rgb:STATUS[key][2]}}; }
+        put(i + 1, c, v, s);
+      });
+    });
+    ws['!ref'] = XLSX.utils.encode_range({s:{r:0, c:0}, e:{r:rows.length, c:head.length - 1}});
+    ws['!cols'] = [16, 14, 9, 24, 12, 9, 9, 13, 60, 50].map(w => ({wch: w}));
+    ws['!rows'] = [{hpt:22}, ...rows.map(r => ({hpt: Math.max(20, 15 * Math.max(1,
+      r.items.filter(x => x.st === 'bad').length, r.items.filter(x => x.st === 'warn').length) + 6)}))];
+    return ws;
+  }
+
+  document.getElementById('bk-xlsx').addEventListener('click', async () => {
+    msg('엑셀 파일을 만드는 중이에요…');
+    try { await loadXLSX(); } catch(err) { msg('엑셀 기능을 불러오지 못했어요. 인터넷 연결을 확인하세요'); return; }
+    const keepCur = {...store.cur}, keepHide = store.hideResult, rows = [], sheets = [];
+    store.hideResult = false;
     Object.keys(store.sheets).forEach(key => {
       const [major, track, level] = key.split('|');
       store.cur = {major, track, level: level || '2'};
@@ -969,63 +1113,26 @@ if (STAFF) {
       g.list.forEach((sh, i) => {
         const st = sh.student;
         if (!filled(st.id) && !filled(st.name) && JSON.stringify(sh.data) === blank) return;
-        g.active = i; compute();
-        rows.push({c, sh, items: lastItems.slice()});
+        g.active = i; render();
+        rows.push({c, st, items: lastItems.slice()});
+        sheets.push({name: sheetName(sh), ws: studentSheet(c, lastItems.slice())});
       });
       g.active = keepAct;
     });
-    store.cur = keepCur; render();
-    return rows;
-  }
-  document.getElementById('bk-xlsx').addEventListener('click', async () => {
-    msg('엑셀 파일을 만드는 중이에요…');
-    try { await loadXLSX(); } catch(err) { msg('엑셀 기능을 불러오지 못했어요. 인터넷 연결을 확인하세요'); return; }
-    const all = collectAll();
-    if (!all.length) { msg('저장할 원생이 없어요. 학번이나 성명을 입력한 시트만 저장돼요'); return; }
-    const term = `${store.term.year}학년도 ${store.term.sem}학기`;
-    const who = r => ({'학번': r.sh.student.id || '', '성명': r.sh.student.name || '', '입학년도': r.sh.student.year || ''});
-    const where = r => ({'전공': r.c.m.name, '과정': TRACK[r.c.track], '취득 자격': (r.c.cert || r.c.minor) ? r.c.certTitle : ''});
-    const list = (r, st) => r.items.filter(i => i.st === st).map(i => `${i.t} (${i.d})`).join(' / ');
-    const summary = all.map(r => {
-      const bad = r.items.filter(i => i.st === 'bad').length, warn = r.items.filter(i => i.st === 'warn').length;
-      return {'학기': term, ...where(r), ...who(r), '판정': bad ? `부족 ${bad}개` : warn ? `확인 필요 ${warn}개` : '충족',
-        '부족 항목': list(r, 'bad'), '확인 필요 항목': list(r, 'warn')};
+    store.cur = keepCur; store.hideResult = keepHide; render(); applyResultVis();
+    if (!rows.length) { msg('저장할 원생이 없어요. 학번이나 성명을 입력한 시트만 저장돼요'); return; }
+    const wb = XLSX.utils.book_new(), used = new Set(['원생별 요약']);
+    XLSX.utils.book_append_sheet(wb, summarySheet(rows), '원생별 요약');
+    sheets.forEach(({name, ws}) => {
+      const base = name.replace(/[\[\]:*?\/\\]/g, '').slice(0, 26) || '원생';
+      let nm = base, k = 2;
+      while (used.has(nm)) nm = `${base}(${k++})`;
+      used.add(nm);
+      XLSX.utils.book_append_sheet(wb, ws, nm);
     });
-    const detail = all.flatMap(r => r.items.map(i => ({...who(r), ...where(r), '구분': i.grp, '항목': i.t, '상태': STATUS[i.st], '내용': i.d})));
-    const courses = all.flatMap(r => coursesOf(r.c, r.sh.data).map(x => ({...who(r), '전공': r.c.m.name, '과정': TRACK[r.c.track],
-      '영역': x.cat, '과목명': x.n, '학기': x.sem, '성적': x.grade, '학점': x.cr})));
-    const wb = XLSX.utils.book_new();
-    const add = (rows, name, widths) => { const ws = XLSX.utils.json_to_sheet(rows); ws['!cols'] = widths.map(w => ({wch: w})); XLSX.utils.book_append_sheet(wb, ws, name); };
-    add(summary, '원생별 요약', [16, 14, 9, 24, 12, 9, 9, 14, 70, 60]);
-    add(detail, '항목별 판정', [12, 9, 9, 14, 9, 24, 16, 34, 9, 60]);
-    add(courses, '입력 과목', [12, 9, 9, 14, 9, 24, 24, 10, 8, 8]);
     const d = new Date(), pad = n => String(n).padStart(2, '0');
     XLSX.writeFile(wb, `졸업가심사_${store.term.year}-${store.term.sem}학기_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.xlsx`);
-    msg(`원생 ${all.length}명을 엑셀로 저장했어요`);
-  });
-
-  document.getElementById('bk-load').addEventListener('click', e => {
-    if (!loadArmed) {
-      loadArmed = true; e.target.classList.add('danger','armed'); e.target.textContent = '한 번 더 누르면 파일 선택';
-      msg('불러오면 지금 입력된 내용이 백업 파일 내용으로 바뀌어요');
-      setTimeout(() => { loadArmed = false; e.target.classList.remove('danger','armed'); e.target.textContent = '백업 불러오기'; }, 5000);
-      return;
-    }
-    document.getElementById('bk-file').click();
-  });
-  document.getElementById('bk-file').addEventListener('change', e => {
-    const file = e.target.files[0]; if (!file) return;
-    const rd = new FileReader();
-    rd.onload = () => {
-      try {
-        const obj = JSON.parse(rd.result);
-        if (!obj || typeof obj.sheets !== 'object') throw new Error('형식');
-        store = obj; normalize(); save(); syncTerm(); render();
-        msg(`${file.name}을 불러왔어요`);
-      } catch(err) { msg('졸업가심사 백업 파일이 아니라서 불러오지 못했어요'); }
-      e.target.value = '';
-    };
-    rd.readAsText(file);
+    msg(`원생 ${rows.length}명을 엑셀로 저장했어요`);
   });
 }
 
