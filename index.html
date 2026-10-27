@@ -794,8 +794,9 @@ function compute(){
 }
 
 const ICON = {ok:'✓', bad:'✕', warn:'!', info:'i'};
-let armed = false;
+let armed = false, lastItems = [];
 function renderResult(c, items){
+  lastItems = items;
   const bad = items.filter(i=>i.st==='bad').length, warn = items.filter(i=>i.st==='warn').length, ok = items.filter(i=>i.st==='ok').length;
   const st = bad ? 'bad' : warn ? 'warn' : 'ok';
   const title = bad ? `부족한 항목 ${bad}개` : warn ? '확인이 필요한 항목이 있어요' : '졸업요건을 모두 충족해요';
@@ -908,7 +909,8 @@ if (STAFF) {
   document.getElementById('page-title').textContent = '졸업 가심사 관리';
   document.title = '졸업가심사 관리';
   const bk = document.getElementById('backup');
-  bk.innerHTML = `<button type="button" class="btn" id="bk-save">백업 파일 저장</button>
+  bk.innerHTML = `<button type="button" class="btn" id="bk-xlsx" style="border-color:var(--ok);color:var(--ok)">엑셀로 저장</button>
+    <button type="button" class="btn" id="bk-save">백업 파일 저장</button>
     <button type="button" class="btn" id="bk-load">백업 불러오기</button>
     <input type="file" id="bk-file" accept=".json,application/json" hidden>
     <span class="hint" id="bk-msg">입력 내용은 이 PC 브라우저에 자동 저장돼요</span>`;
@@ -923,6 +925,85 @@ if (STAFF) {
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     msg('백업 파일을 저장했어요');
   });
+  /* 엑셀 저장: 원생별 요약 / 항목별 판정 / 입력 과목 3개 시트 */
+  const loadXLSX = () => window.XLSX ? Promise.resolve() : new Promise((ok, fail) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    sc.onload = ok; sc.onerror = fail; document.head.appendChild(sc);
+  });
+  const STATUS = {ok:'충족', bad:'부족', warn:'확인 필요', info:'안내'};
+  function coursesOf(c, s){
+    const out = [], push = (cat, n, sem, grade, cr) => out.push({cat, n, sem: sem || '', grade: grade || '', cr: cr || ''});
+    const LBL = {edu:'교과교육학', content:'교과내용학', teach:'교직과목', extra:'추가학점', common:'일선/공통'};
+    Object.keys(LBL).forEach(k => {
+      if (k === 'edu' && !c.edu) return;
+      if ((k === 'extra' && s.method === 'thesis')) return;
+      s.lists[k].filter(e => filled(e.n) || num(e.c) > 0).forEach(e => push('졸업 · ' + LBL[k], e.n, '', '', e.c));
+    });
+    if (s.method !== 'extra') s.thesis.forEach((v,i) => v && push('졸업 · 논문·보고서지도', `논문·보고서지도 ${['Ⅰ','Ⅱ','Ⅲ'][i]}`, '', '', '2'));
+    const R = s.rows, done = id => filled(R[id].sem) || filled(R[id].grade);
+    if (c.cert && !c.c1) {
+      THEORY.forEach((n,i) => done('t'+i) && push('교직이론', n, R['t'+i].sem, R['t'+i].grade));
+      LITERACY.forEach((n,i) => done('s'+i) && push('교직소양', n, R['s'+i].sem, R['s'+i].grade));
+      PRACTICE.forEach((n,i) => done('p'+i) && push('교육실습', n, R['p'+i].sem, R['p'+i].grade));
+    }
+    if ((c.cert && !c.c1) || c.minor) {
+      if (c.minor || !c.m.noEduArea) EDU_AREA.forEach((n,i) => done('e'+i) && push('교과교육영역', n, R['e'+i].sem, R['e'+i].grade, R['e'+i].cr));
+    }
+    if (c.cert && !c.c1) s.basic.filter(b => filled(b.n) && (filled(b.sem) || filled(b.grade))).forEach(b => push('기본이수과목', b.n, b.sem, b.grade, b.cr));
+    if (c.minor) s.minor.rows.filter(r => r.pick && (filled(r.sem) || filled(r.grade)))
+      .forEach(r => push(r.pick === '__etc' ? '교과내용영역(기본이수 외)' : '교과내용영역(기본이수)', r.pick === '__etc' ? r.n : r.pick, r.sem, r.grade, r.cr));
+    if (c.c1) {
+      s.c1.req.forEach((r,i) => filled(r.sem) && push('필수', C1_REQ[i], r.sem, '', r.cr));
+      s.c1.elect.filter(e => filled(e.n) && filled(e.sem)).forEach(e => push('선택', e.n, e.sem, '', e.cr));
+    }
+    return out;
+  }
+  function collectAll(){
+    const keepCur = {...store.cur}, rows = [];
+    Object.keys(store.sheets).forEach(key => {
+      const [major, track, level] = key.split('|');
+      store.cur = {major, track, level: level || '2'};
+      const c = cfg(); if (c.key !== key) return;
+      const g = store.sheets[key], keepAct = g.active, blank = JSON.stringify(fresh(c));
+      g.list.forEach((sh, i) => {
+        const st = sh.student;
+        if (!filled(st.id) && !filled(st.name) && JSON.stringify(sh.data) === blank) return;
+        g.active = i; compute();
+        rows.push({c, sh, items: lastItems.slice()});
+      });
+      g.active = keepAct;
+    });
+    store.cur = keepCur; render();
+    return rows;
+  }
+  document.getElementById('bk-xlsx').addEventListener('click', async () => {
+    msg('엑셀 파일을 만드는 중이에요…');
+    try { await loadXLSX(); } catch(err) { msg('엑셀 기능을 불러오지 못했어요. 인터넷 연결을 확인하세요'); return; }
+    const all = collectAll();
+    if (!all.length) { msg('저장할 원생이 없어요. 학번이나 성명을 입력한 시트만 저장돼요'); return; }
+    const term = `${store.term.year}학년도 ${store.term.sem}학기`;
+    const who = r => ({'학번': r.sh.student.id || '', '성명': r.sh.student.name || '', '입학년도': r.sh.student.year || ''});
+    const where = r => ({'전공': r.c.m.name, '과정': TRACK[r.c.track], '취득 자격': (r.c.cert || r.c.minor) ? r.c.certTitle : ''});
+    const list = (r, st) => r.items.filter(i => i.st === st).map(i => `${i.t} (${i.d})`).join(' / ');
+    const summary = all.map(r => {
+      const bad = r.items.filter(i => i.st === 'bad').length, warn = r.items.filter(i => i.st === 'warn').length;
+      return {'학기': term, ...where(r), ...who(r), '판정': bad ? `부족 ${bad}개` : warn ? `확인 필요 ${warn}개` : '충족',
+        '부족 항목': list(r, 'bad'), '확인 필요 항목': list(r, 'warn')};
+    });
+    const detail = all.flatMap(r => r.items.map(i => ({...who(r), ...where(r), '구분': i.grp, '항목': i.t, '상태': STATUS[i.st], '내용': i.d})));
+    const courses = all.flatMap(r => coursesOf(r.c, r.sh.data).map(x => ({...who(r), '전공': r.c.m.name, '과정': TRACK[r.c.track],
+      '영역': x.cat, '과목명': x.n, '학기': x.sem, '성적': x.grade, '학점': x.cr})));
+    const wb = XLSX.utils.book_new();
+    const add = (rows, name, widths) => { const ws = XLSX.utils.json_to_sheet(rows); ws['!cols'] = widths.map(w => ({wch: w})); XLSX.utils.book_append_sheet(wb, ws, name); };
+    add(summary, '원생별 요약', [16, 14, 9, 24, 12, 9, 9, 14, 70, 60]);
+    add(detail, '항목별 판정', [12, 9, 9, 14, 9, 24, 16, 34, 9, 60]);
+    add(courses, '입력 과목', [12, 9, 9, 14, 9, 24, 24, 10, 8, 8]);
+    const d = new Date(), pad = n => String(n).padStart(2, '0');
+    XLSX.writeFile(wb, `졸업가심사_${store.term.year}-${store.term.sem}학기_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.xlsx`);
+    msg(`원생 ${all.length}명을 엑셀로 저장했어요`);
+  });
+
   document.getElementById('bk-load').addEventListener('click', e => {
     if (!loadArmed) {
       loadArmed = true; e.target.classList.add('danger','armed'); e.target.textContent = '한 번 더 누르면 파일 선택';
